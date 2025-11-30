@@ -1,53 +1,41 @@
 import json
+import os
 import torch
-from openai import OpenAI
-from sentence_transformers import SentenceTransformer
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from DatabaseConnector.milvus.milvus_connector import MilvusConnector
 from tqdm import tqdm
-from qwen3_model_cus import Qwen3ModelCustom
-from qwen3_model_cus import last_token_pool, add_new_token_mask
-import os
-import torch.nn.functional as F
+from cus_qwen3_attention import Qwen3ModelWithFusion, get_embedding
+
 os.environ["HF_HUB_OFFLINE"] = "1"
-# cache_foler = "~/.cache/huggingface/hub"
 os.environ['HF_HOME'] = "~/.cache/huggingface/"
 class EmbeddingService:
-    def __init__(self):
-        # self.qwen_client = OpenAI(
-        #     api_key="Oid4IIeJO75mKlbomJfrma8SpNwMAsMp",
-        #     base_url="https://api.deepinfra.com/v1/openai"
-        # )
+    def __init__(self, device="cuda"):
+        # Load Qwen3 tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-Embedding-0.6B")
-        self.qwen3_model = Qwen3ModelCustom.from_pretrained("Qwen/Qwen3-Embedding-0.6B")
-        self.aiteam_model = SentenceTransformer("AITeamVN/Vietnamese_Embedding_v2", device="cuda")
-    
-    def get_qwen_embedding(self, text: str):
-        response = self.qwen_client.embeddings.create(
-            model="Qwen/Qwen3-Embedding-8B",
-            input=text,
-            encoding_format="float"
+        
+        # Load Vietnamese Embedding tokenizer
+        self.embedding_tokenizer = AutoTokenizer.from_pretrained("AITeamVN/Vietnamese_Embedding_v2")
+        
+        # Load custom Qwen3 model with fusion
+        self.model = Qwen3ModelWithFusion.from_pretrained(
+            "Qwen/Qwen3-Embedding-0.6B",
+            embedding_model_name="AITeamVN/Vietnamese_Embedding_v2",
+            scalar_mix_mode='uniform',
+            last_n_layers=4
         )
-        return response.data[0].embedding
+        self.model.to(device)
+        self.model.eval()
     
-    def get_aiteam_embedding(self, text: str):
-        embeddings = self.aiteam_model.encode([text], convert_to_tensor=False)
-        return embeddings.tolist()[0]
-    
-    def get_combined_embedding(self, text: str):
-        with torch.no_grad():
-            input = self.tokenizer(text, return_tensors="pt")
-            input = input.to(self.qwen3_model.device)
-            semantic_embeddings = self.aiteam_model.encode([text], convert_to_tensor=False)
-            new_attention_mask = add_new_token_mask(input)
-            input["attention_mask"] = new_attention_mask
-            semantic_embeddings = torch.from_numpy(semantic_embeddings)
-            semantic_embeddings = semantic_embeddings.to(self.qwen3_model.device)
-            embedding = self.qwen3_model(**input, semantic_embeddings=semantic_embeddings.unsqueeze(1))
-            embedding = last_token_pool(embedding.last_hidden_state, input["attention_mask"])
-            embedding = F.normalize(embedding, p=2, dim=1)
-            torch.cuda.empty_cache()
-            return embedding.tolist()[0]
+    def get_embedding(self, text: str):
+        """Get embedding using Qwen3ModelWithFusion with cross-attention."""
+        embedding = get_embedding(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            embedding_tokenizer=self.embedding_tokenizer,
+            text=text
+        )
+        torch.cuda.empty_cache()
+        return embedding.tolist()[0]
 
 
 class RerankerService:
@@ -105,11 +93,11 @@ class RerankerService:
 class SearchService:
     def __init__(self):
         self.milvus = MilvusConnector(
-            uri="http://localhost:19630",
+            uri="http://103.253.20.30:19630",
             token="root:Milvus",
             db_name="Master"
         )
-        self.collection_name = "vlsp_chunks_qwen3_cus"
+        self.collection_name = "vlsp_chunks_qwen3_cus_attention"
     
     def search(self, embedding, limit=500):
         results = self.milvus.search_records(
@@ -149,8 +137,7 @@ def main():
         qid = item["qid"]
         question = item["question"]
         detail_results = []
-        # embedding = embedding_service.get_aiteam_embedding(question)
-        embedding = embedding_service.get_combined_embedding(question)
+        embedding = embedding_service.get_embedding(question)
         search_results = search_service.search(embedding, limit=2000)
         for result in search_results:
             detail_results.append({
