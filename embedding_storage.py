@@ -1,25 +1,22 @@
-from DatabaseConnector.milvus.milvus_connector import MilvusConnector
-from tqdm import tqdm
-from glob import glob
-import json
-from pymilvus import CollectionSchema, FieldSchema, DataType
-from sentence_transformers import SentenceTransformer
 import asyncio
-from DatabaseConnector.milvus.milvus_connector import MilvusConnector
-from pymilvus import CollectionSchema, FieldSchema, DataType
-from tqdm import tqdm
-from qwen3_model_cus import Qwen3ModelCustom, last_token_pool
-from transformers import AutoTokenizer
+import json
+from glob import glob
+
 import torch
-import torch.nn.functional as F
+from tqdm import tqdm
+from pymilvus import CollectionSchema, FieldSchema, DataType
+from transformers import AutoTokenizer
+
+from DatabaseConnector.milvus.milvus_connector import MilvusConnector
+from cus_qwen3_attention import Qwen3ModelWithFusion, get_embedding
 
 milvus_connector = MilvusConnector(
-    uri="http://localhost:19630",  # type: ignore
+    uri="http://103.253.20.30:19630",  # type: ignore
     token="root:Milvus",  # type: ignore
     db_name="Master",  # type: ignore
 )
 doc_collection = "documents"
-chunks_collection = "vlsp_chunks_qwen3_cus"
+chunks_collection = "vlsp_chunks_qwen3_cus_attention"
 qwen3_chunks_collection = "vlsp_chunks_qwen3"
 
 document_schema = CollectionSchema(
@@ -54,65 +51,43 @@ milvus_connector.create_collection(
     vector_field=["vector_content"],  
 )
 
-model_embedding = SentenceTransformer("AITeamVN/Vietnamese_Embedding_v2", device="cuda")
-# model_embedding_summary = SentenceTransformer("AITeamVN/Vietnamese_Embedding_v2", device="cuda:0")
-
-qwen3_model = Qwen3ModelCustom.from_pretrained("Qwen/Qwen3-Embedding-0.6B")
-qwen3_model.to("cuda")
-# qwen3_model_summary = Qwen3ModelCustom.from_pretrained("Qwen/Qwen3-Embedding-0.6B", device="cuda:0")
-
+# Load Qwen3 tokenizer
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-Embedding-0.6B")
-def add_new_token_mask(batch_input):
-    new_length = batch_input.input_ids.shape[1] + 1
-    new_attention_mask = []
-    for element in batch_input.attention_mask:
-        ones_count = element.sum()
-        mask_new = torch.ones(ones_count + 1)
-        padding_mask = torch.zeros(new_length - ones_count - 1)
 
-        new_attention_mask.append(torch.cat([mask_new, padding_mask]))
-    new_attention_mask = torch.stack(new_attention_mask)
-    return new_attention_mask
+# Load Vietnamese Embedding tokenizer
+embedding_tokenizer = AutoTokenizer.from_pretrained("AITeamVN/Vietnamese_Embedding_v2")
 
-def create_embeddings_batch(texts, batch_size=64, model= SentenceTransformer("AITeamVN/Vietnamese_Embedding_v2", device="cuda")):
-    """Create embeddings in batches for better performance using SentenceTransformers"""
+# Load custom Qwen3 model with fusion
+qwen3_model = Qwen3ModelWithFusion.from_pretrained(
+    "Qwen/Qwen3-Embedding-0.6B",
+    embedding_model_name="AITeamVN/Vietnamese_Embedding_v2",
+    scalar_mix_mode='uniform',
+    last_n_layers=4
+)
+qwen3_model.to("cuda")
+qwen3_model.eval()
+def create_embeddings_batch(texts, batch_size=64):
+    """Create embeddings in batches using Qwen3ModelWithFusion with cross-attention."""
     embeddings = []
     
     for i in tqdm(range(0, len(texts), batch_size), desc="Creating embeddings"):
-        with torch.no_grad():
-            batch = texts[i:i + batch_size]
-            # try:
-                # Create embeddings for the batch using SentenceTransformers
-            batch_input = tokenizer(batch, padding=True, return_tensors="pt")
-            
-            batch_embeddings = model.encode(batch)
-            batch_embeddings = torch.from_numpy(batch_embeddings)
-            batch_embeddings = batch_embeddings.to("cuda")
-
-            new_attention_mask = add_new_token_mask(batch_input)
-            batch_input["attention_mask"] = new_attention_mask
-            batch_input = batch_input.to("cuda")
-            embeddings_qwen3 = qwen3_model(**batch_input, semantic_embeddings=batch_embeddings.unsqueeze(1))
-            embedding = last_token_pool(embeddings_qwen3.last_hidden_state, batch_input["attention_mask"])
-            embedding = F.normalize(embedding, p=2, dim=1)
-            embeddings.extend(embedding.tolist())
-            torch.cuda.empty_cache()
-        # except Exception as e:
-        #     print(f"Error creating embeddings for batch {i//batch_size + 1}: {e}")
-        #     # Fallback: create embeddings one by one for this batch
-        #     for text in batch:
-        #         try:
-        #             embedding = model.encode([text], convert_to_tensor=False)
-        #             embeddings.append(embedding[0].tolist())
-        #         except Exception as fallback_e:
-        #             print(f"Error creating embedding for individual text: {fallback_e}")
-        #             # Use a zero vector as fallback
-        #             embeddings.append([0.0] * 1024)
+        batch = texts[i:i + batch_size]
+        
+        # Use get_embedding from cus_qwen3_attention
+        batch_embeddings = get_embedding(
+            model=qwen3_model,
+            tokenizer=tokenizer,
+            embedding_tokenizer=embedding_tokenizer,
+            text=batch
+        )
+        
+        embeddings.extend(batch_embeddings.tolist())
+        torch.cuda.empty_cache()
     
     return embeddings
-async def async_create_embeddings_batch(texts, batch_size=64, model= SentenceTransformer("AITeamVN/Vietnamese_Embedding_v2", device="cuda")):
-    # Chạy hàm sync trong thread riêng
-    return await asyncio.to_thread(create_embeddings_batch, texts, batch_size, model)
+async def async_create_embeddings_batch(texts, batch_size=64):
+    """Async wrapper for create_embeddings_batch."""
+    return await asyncio.to_thread(create_embeddings_batch, texts, batch_size)
 def prepare_texts_for_embedding(data, mapping, mapping_docname):
     """Prepare all texts that need embedding"""
     content_texts = []
@@ -147,15 +122,15 @@ def prepare_texts_for_embedding(data, mapping, mapping_docname):
     
     return content_texts, summary_texts, items_with_header_summary, items_without_header_summary
 
-with open("../tot_nghiep/vlsp/data/train.json", "r", encoding='utf-8') as f:
+with open("./data/train.json", "r", encoding='utf-8') as f:
     train_data = json.load(f)
     
-with open("../tot_nghiep/vlsp/data/mapping_docname_norm.json", "r", encoding='utf-8') as f:
+with open("./data/mapping_docname_norm.json", "r", encoding='utf-8') as f:
     mapping_docname = json.load(f)
-list_file_chunks = glob("../tot_nghiep/vlsp/leaf_chunks/*.json")
-with open("../tot_nghiep/vlsp/data/mapping_docname_norm.json", "r", encoding='utf-8') as f:
+list_file_chunks = glob("./data/leaf_chunks/*.json")
+with open("./data/mapping_docname_norm.json", "r", encoding='utf-8') as f:
     mapping_docname = json.load(f)
-with open("../tot_nghiep/vlsp/aug_chunks/legal_corpus.json", "r") as f:
+with open("./data/legal_corpus.json", "r") as f:
     raw_aid_header = json.load(f)
 mapping = {}
 for sample in raw_aid_header:
@@ -195,19 +170,15 @@ async def process_files():
         
         # Prepare all texts for embedding
         content_texts, summary_texts, items_with_header_summary, items_without_header_summary = prepare_texts_for_embedding(
-            data, mapping, mapping_docname
+            data[:10], mapping, mapping_docname
         )
         
-        # tasks = [
-        #     async_create_embeddings_batch(content_texts, batch_size=1, model=model_embedding),
-        #     # async_create_embeddings_batch(summary_texts, batch_size=32, model=model_embedding_summary)
-        # ]
-        # content_embeddings = await asyncio.gather(*tasks)
-        content_embeddings = create_embeddings_batch(content_texts, batch_size=1, model=model_embedding)
+        # Create embeddings using Qwen3ModelWithFusion
+        content_embeddings = create_embeddings_batch(content_texts, batch_size=8)
         
         # Assign embeddings back to items
         insert_data = []
-        for i, item in enumerate(data):
+        for i, item in enumerate(data[:10]):
             aid = item["aid"]
             law_id = item["law_id"]
             # results_qwen3 = milvus_connector.filter_records(qwen3_chunks_collection, f"aid == {aid} and law_id == '{law_id}'", ["id", "aid", "law_id", "vector"])

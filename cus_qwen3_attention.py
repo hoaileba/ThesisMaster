@@ -491,3 +491,4 @@ if __name__ == "__main__":
     similarity_false = F.cosine_similarity(question_embedding, ans_embedding, dim=1)
     print("similarity question and true answer", similarity_true)
     print("similarity question and false answer", similarity_false)
+    print(ans_embedding.shape)
