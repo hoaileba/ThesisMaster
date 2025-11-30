@@ -428,12 +428,11 @@ def get_embedding(model, tokenizer, embedding_tokenizer, text):
         return_tensors="pt", 
         padding=True,
         truncation=True,
-        max_length=256
     )
     embedding_inputs = {k: v.to("cuda") for k, v in embedding_inputs.items()}
     
     # Forward pass với fusion
-    print("\nRunning model with fusion...")
+    # print("\nRunning model with fusion...")
     with torch.no_grad():
         outputs = model(
             input_ids=qwen_inputs["input_ids"],

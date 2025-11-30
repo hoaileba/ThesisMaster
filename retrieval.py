@@ -4,7 +4,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from DatabaseConnector.milvus.milvus_connector import MilvusConnector
 from tqdm import tqdm
-from cus_qwen3_attention import Qwen3ModelWithFusion, get_embedding
+from cus_qwen3_attention import Qwen3ModelWithFusion, get_embedding, get_detailed_instruct
 
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ['HF_HOME'] = "~/.cache/huggingface/"
@@ -27,6 +27,8 @@ class EmbeddingService:
         self.model.eval()
     
     def get_embedding(self, text: str):
+        instruction = "Tìm kiếm thông tin trả lời câu hỏi sau:"
+        text = get_detailed_instruct(instruction, text)
         """Get embedding using Qwen3ModelWithFusion with cross-attention."""
         embedding = get_embedding(
             model=self.model,
