@@ -1,0 +1,12 @@
+[submodule "packages/ChunkConstruct"]
+	path = packages/ChunkConstruct
+	url = git@github.com:GivingFuck/ChunkConstruct.git
+[submodule "packages/DocReader"]
+	path = packages/DocReader
+	url = git@github.com:GivingFuck/DocReader.git
+[submodule "packages/TreeConstruct"]
+	path = packages/TreeConstruct
+	url = git@github.com:GivingFuck/TreeConstruct.git
+[submodule "packages/DatabaseConnector"]
+	path = packages/DatabaseConnector
+	url = git@github.com:GivingFuck/DatabaseConnector.git
