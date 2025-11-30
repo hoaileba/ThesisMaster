@@ -129,7 +129,7 @@ def main():
     search_service = SearchService()
     # reranker_service = RerankerService()
     
-    with open("../tot_nghiep/vlsp/data/private_test.json", "r", encoding="utf-8") as f:
+    with open("./data/private_test.json", "r", encoding="utf-8") as f:
         questions = json.load(f)
     
     results = []
