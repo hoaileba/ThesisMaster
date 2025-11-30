@@ -1,7 +1,7 @@
 import json 
 from tqdm import tqdm
 path = "results_combined.json"
-with open("../tot_nghiep/vlsp/data/private_test.json", "r", encoding="utf-8") as f:
+with open("./data/private_test.json", "r", encoding="utf-8") as f:
     questions = json.load(f)
 mapping_qid = {q["qid"]: q for q in questions}
 with open(path, "r", encoding="utf-8") as f:
