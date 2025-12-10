@@ -16,7 +16,7 @@ milvus_connector = MilvusConnector(
     db_name="Master",  # type: ignore
 )
 doc_collection = "documents"
-chunks_collection = "vlsp_chunks_qwen3_cus_attention"
+chunks_collection = "vlsp_chunks_qwen3"
 qwen3_chunks_collection = "vlsp_chunks_qwen3"
 
 document_schema = CollectionSchema(

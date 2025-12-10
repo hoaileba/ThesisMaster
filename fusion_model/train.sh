@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1 nohup python train.py --dataset bkai --batch_size 256 --mini_batch_size 32 --epochs 20 --lr 5e-5 --loss infonce --save_dir ./checkpoints_bkai > train_bkai.log 2>&1 &

@@ -9,3 +9,5 @@ data
 *.jsonl.gz.part.3
 *.jsonl.gz.part.4
 *.jsonl.gz.part.5
+**/checkpoints_*/**
+*.log
